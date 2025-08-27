@@ -1,7 +1,7 @@
 module github.com/nziu/lnk
 
-go 1.21.5
+go 1.20
 
 require github.com/go-ole/go-ole v1.3.0
 
-require golang.org/x/sys v0.15.0 // indirect
+require golang.org/x/sys v0.1.0 // indirect
