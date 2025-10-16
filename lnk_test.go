@@ -1,45 +1,52 @@
-package lnk_test
+package lnk
 
 import (
 	"os"
-	"os/user"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"testing"
-
-	"github.com/nziu/lnk"
 )
 
-func TestLnk(t *testing.T) {
-	user, _ := user.Current()
-	tempDir := filepath.Join(user.HomeDir, "/AppData/Local/Temp/")
+// TestMakeAndRead tests creating and reading a shortcut
+func TestMakeAndRead(t *testing.T) {
+	// Skips the test if not running on Windows
+	if runtime.GOOS != "windows" {
+		t.Skip("skipping test on non-Windows platform")
+	}
 
-	tmpfile, err := os.CreateTemp(tempDir, "temp")
+	tempDir := t.TempDir()
+	shortcutPath := filepath.Join(tempDir, "test_shortcut.lnk")
+
+	// Define expected shortcut properties
+	want := Shortcut{
+		TargetPath:       "C:\\Windows\\System32\\notepad.exe",
+		Arguments:        "test.txt",
+		Description:      "Test Shortcut",
+		Hotkey:           "Ctrl+Alt+T",
+		WorkingDirectory: "C:\\Windows\\System32",
+		WindowStyle:      DefaultWindowStyle,
+		IconLocation:     DefaultIconLocation,
+	}
+
+	// Create shortcut
+	if err := Make(shortcutPath, want); err != nil {
+		t.Fatalf("Make() failed: %v", err)
+	}
+
+	// Verify file exists
+	if _, err := os.Stat(shortcutPath); os.IsNotExist(err) {
+		t.Fatal("shortcut file was not created")
+	}
+
+	// Read shortcut
+	got, err := Read(shortcutPath)
 	if err != nil {
-		t.Fatalf("could not create temp file %v", err)
-	}
-	defer os.Remove(tmpfile.Name())
-
-	got := lnk.Shortcut{
-		TargetPath:       tmpfile.Name(),
-		Description:      "tmpfile",
-		IconLocation:     "%SystemRoot%\\System32\\SHELL32.dll,0",
-		WindowStyle:      "",
-		WorkingDirectory: filepath.Dir(tmpfile.Name()),
+		t.Fatalf("Read() failed: %v", err)
 	}
 
-	tempLnk := tmpfile.Name() + ".lnk"
-	if err := lnk.Make(tempLnk, got); err != nil {
-		t.Fatalf("unable to make shortcut %v", err)
-	}
-	defer os.Remove(tempLnk)
-
-	want, err := lnk.Read(tempLnk)
-	if err != nil {
-		t.Fatalf("unable to read shortcut %v", err)
-	}
-
-	if !reflect.DeepEqual(got, want) {
-		t.Errorf("got %#v want %#v", got, want)
+	// Compare all properties using reflect.DeepEqual
+	if !reflect.DeepEqual(want, got) {
+		t.Errorf("Shortcut mismatch:\nWant: %+v\nGot:  %+v", want, got)
 	}
 }
