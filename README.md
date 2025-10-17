@@ -10,7 +10,6 @@ A simple Go library for creating and reading Windows shortcut (`.lnk`) files.
 - Create Windows shortcuts with full property control
 - Read existing shortcut properties
 - Pure Go implementation using COM automation
-- Windows-only (uses `WScript.Shell` COM object)
 
 ## Installation
 
@@ -18,56 +17,44 @@ A simple Go library for creating and reading Windows shortcut (`.lnk`) files.
 go get github.com/nziu/lnk
 ```
 
-## Usage
+## Quick Start
 
-### Creating a Shortcut
-
-```go
-package main
-
-import (
-    "log"
-    "github.com/nziu/lnk"
-)
-
-func main() {
-    shortcut := lnk.Shortcut{
-        TargetPath:       "C:\\Windows\\System32\\notepad.exe",
-        Arguments:        "my.txt",
-        Description:      "My Application",
-        Hotkey:           "Ctrl+Alt+M",
-        WorkingDirectory: "C:\\Windows\\System32",
-        IconLocation:     lnk.DefaultIconLocation,
-        WindowStyle:      lnk.DefaultWindowStyle,
-    }
-
-    err := lnk.Make("C:\\Users\\Public\\Desktop\\MyApp.lnk", shortcut)
-    if err != nil {
-        log.Fatal(err)
-    }
-}
-```
-
-### Reading a Shortcut
+Here's a simple example to create and read a Windows shortcut:
 
 ```go
 package main
 
 import (
-    "fmt"
-    "log"
-    "github.com/nziu/lnk"
+	"fmt"
+	"log"
+
+	"github.com/nziu/lnk"
 )
 
 func main() {
-    shortcut, err := lnk.Read("C:\\Users\\Public\\Desktop\\MyApp.lnk")
-    if err != nil {
-        log.Fatal(err)
-    }
+	shortcut := lnk.Shortcut{
+		TargetPath:       "C:\\Windows\\System32\\notepad.exe",
+		Arguments:        "",
+		Description:      "Notepad Shortcut",
+		Hotkey:           "Alt+Ctrl+T",
+		WorkingDirectory: "C:\\Windows\\System32",
+		IconLocation:     ",0",
+		WindowStyle:      "1",
+	}
 
-    fmt.Printf("Target: %s\n", shortcut.TargetPath)
-    fmt.Printf("Arguments: %s\n", shortcut.Arguments)
-    fmt.Printf("Description: %s\n", shortcut.Description)
+	// Create a new shortcut
+	if err := lnk.Make("notepad.lnk", shortcut); err != nil {
+		log.Fatalf("Failed to create shortcut: %v", err)
+	}
+
+	// Read and display shortcut properties
+	shortcut, err := lnk.Read("notepad.lnk")
+	if err != nil {
+		log.Fatalf("Failed to read shortcut: %v", err)
+	}
+	fmt.Printf("Target Path:       %s\n", shortcut.TargetPath)
+	fmt.Printf("Description:       %s\n", shortcut.Description)
+	fmt.Printf("Working Directory: %s\n", shortcut.WorkingDirectory)
 }
 ```
 
