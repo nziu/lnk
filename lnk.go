@@ -49,6 +49,8 @@ type Shortcut struct {
 	Hotkey string
 
 	// IconLocation specifies the icon file and index (e.g., "shell32.dll,0")
+	// Format: "path,index" where index is the icon number (0-based)
+	// Use ",0" to use the target file's default icon (index 0)
 	// If empty, defaults to DefaultIconLocation
 	IconLocation string
 
@@ -172,7 +174,14 @@ func Read(path string) (Shortcut, error) {
 		if err != nil {
 			return shortcut, fmt.Errorf("failed to get property %s: %w", propName, err)
 		}
-		*fieldPtr = property.ToString()
+
+		// Convert COM Variant to string
+		switch property.VT {
+		case ole.VT_BSTR:
+			*fieldPtr = property.ToString()
+		case ole.VT_I4:
+			*fieldPtr = fmt.Sprintf("%d", property.Value())
+		}
 	}
 
 	return shortcut, nil

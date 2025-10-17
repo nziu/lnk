@@ -23,7 +23,7 @@ func TestMakeAndRead(t *testing.T) {
 		TargetPath:       "C:\\Windows\\System32\\notepad.exe",
 		Arguments:        "test.txt",
 		Description:      "Test Shortcut",
-		Hotkey:           "Ctrl+Alt+T",
+		Hotkey:           "Alt+Ctrl+T", // Windows standardizes hotkey order
 		WorkingDirectory: "C:\\Windows\\System32",
 		WindowStyle:      DefaultWindowStyle,
 		IconLocation:     DefaultIconLocation,
