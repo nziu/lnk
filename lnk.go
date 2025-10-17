@@ -33,15 +33,6 @@ const (
 	MinimizedWindow     = "7"
 )
 
-// Error messages
-var (
-	ErrEmptyPath      = errors.New("path cannot be empty")
-	ErrInvalidPath    = errors.New("path must have .lnk extension")
-	ErrCreateObject   = errors.New("failed to create WScript.Shell object")
-	ErrQueryInterface = errors.New("failed to query interface")
-	ErrCreateShortcut = errors.New("failed to create shortcut object")
-)
-
 // Shortcut represents a Windows shortcut (.lnk file) and its properties.
 // All fields are optional when creating a shortcut, but TargetPath is typically required.
 type Shortcut struct {
@@ -105,7 +96,7 @@ func newWShell() (*wShell, error) {
 	if err != nil {
 		ole.CoUninitialize()
 		runtime.UnlockOSThread()
-		return nil, fmt.Errorf("%w: %v", ErrCreateObject, err)
+		return nil, fmt.Errorf("failed to create WScript.Shell object: %v", err)
 	}
 
 	wshShell, err := wshShellObject.QueryInterface(ole.IID_IDispatch)
@@ -113,7 +104,7 @@ func newWShell() (*wShell, error) {
 		wshShellObject.Release()
 		ole.CoUninitialize()
 		runtime.UnlockOSThread()
-		return nil, fmt.Errorf("%w: %v", ErrQueryInterface, err)
+		return nil, fmt.Errorf("failed to query interface: %v", err)
 	}
 
 	return &wShell{
@@ -138,7 +129,7 @@ func (w *wShell) Close() {
 func (w *wShell) createShortcut(path string) (*ole.IDispatch, error) {
 	result, err := oleutil.CallMethod(w.wshShell, "CreateShortcut", path)
 	if err != nil {
-		return nil, fmt.Errorf("%w: %v", ErrCreateShortcut, err)
+		return nil, fmt.Errorf("failed to create shortcut object: %v", err)
 	}
 	return result.ToIDispatch(), nil
 }
@@ -146,10 +137,10 @@ func (w *wShell) createShortcut(path string) (*ole.IDispatch, error) {
 // validatePath validates the shortcut file path
 func validatePath(path string) error {
 	if strings.TrimSpace(path) == "" {
-		return ErrEmptyPath
+		return errors.New("path cannot be empty")
 	}
 	if !strings.HasSuffix(strings.ToLower(path), ".lnk") {
-		return ErrInvalidPath
+		return errors.New("path must have .lnk extension")
 	}
 	return nil
 }
@@ -181,9 +172,7 @@ func Read(path string) (Shortcut, error) {
 		if err != nil {
 			return shortcut, fmt.Errorf("failed to get property %s: %w", propName, err)
 		}
-		if property.VT == ole.VT_BSTR {
-			*fieldPtr = property.ToString()
-		}
+		*fieldPtr = property.ToString()
 	}
 
 	return shortcut, nil
