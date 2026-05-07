@@ -1,3 +1,5 @@
+//go:build windows
+
 // Package lnk provides functionality to create and read Windows shortcut (.lnk) files.
 // It uses Windows Script Shell COM object to interact with shortcut files.
 //
@@ -90,8 +92,18 @@ func newWShell() (*wShell, error) {
 	runtime.LockOSThread()
 
 	if err := ole.CoInitializeEx(0, ole.COINIT_APARTMENTTHREADED|ole.COINIT_SPEED_OVER_MEMORY); err != nil {
-		runtime.UnlockOSThread()
-		return nil, fmt.Errorf("failed to initialize COM: %w", err)
+		oleErr, ok := err.(*ole.OleError)
+		if !ok {
+			runtime.UnlockOSThread()
+			return nil, fmt.Errorf("failed to initialize COM: %w", err)
+		}
+
+		// 1 = S_FALSE (already initialized as STA), 0x80010106 = RPC_E_CHANGED_MODE (already initialized as MTA)
+		hr := oleErr.Code()
+		if hr != 1 && hr != 0x80010106 {
+			runtime.UnlockOSThread()
+			return nil, fmt.Errorf("failed to initialize COM: %w", err)
+		}
 	}
 
 	wshShellObject, err := oleutil.CreateObject("WScript.Shell")
@@ -182,6 +194,9 @@ func Read(path string) (Shortcut, error) {
 		case ole.VT_I4:
 			*fieldPtr = fmt.Sprintf("%d", property.Value())
 		}
+
+		// Cleanup VARIANT object immediately to prevent accumulation in loop
+		property.Clear()
 	}
 
 	return shortcut, nil
@@ -216,13 +231,17 @@ func Make(path string, shortcut Shortcut) error {
 
 	// Set all properties using the shortcut's properties map
 	for propName, fieldPtr := range shortcut.properties() {
-		if _, err := oleutil.PutProperty(idispatch, propName, *fieldPtr); err != nil {
+		if res, err := oleutil.PutProperty(idispatch, propName, *fieldPtr); err != nil {
 			return fmt.Errorf("failed to set property %s: %w", propName, err)
+		} else if res != nil {
+			res.Clear()
 		}
 	}
 
-	if _, err := oleutil.CallMethod(idispatch, "Save"); err != nil {
+	if res, err := oleutil.CallMethod(idispatch, "Save"); err != nil {
 		return fmt.Errorf("failed to save shortcut: %w", err)
+	} else if res != nil {
+		res.Clear()
 	}
 
 	return nil
