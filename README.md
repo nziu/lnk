@@ -43,7 +43,7 @@ func main() {
 	}
 
 	// Create a new shortcut
-	if err := lnk.Make("notepad.lnk", shortcut); err != nil {
+	if err := lnk.Write("notepad.lnk", shortcut); err != nil {
 		log.Fatalf("Failed to create shortcut: %v", err)
 	}
 

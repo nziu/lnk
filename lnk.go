@@ -7,11 +7,11 @@
 //
 //	// Create a new shortcut
 //	shortcut := lnk.Shortcut{
-//		TargetPath:       "C:\\Program Files\\MyApp\\myapp.exe",
+//		TargetPath:       "C:\\Program Files\\MyApp\\app.exe",
 //		Description:      "My Application",
 //		WorkingDirectory: "C:\\Program Files\\MyApp",
 //	}
-//	err := lnk.Make("C:\\Users\\Desktop\\MyApp.lnk", shortcut)
+//	err := lnk.Write("C:\\Users\\Desktop\\MyApp.lnk", shortcut)
 //
 //	// Read an existing shortcut
 //	shortcut, err := lnk.Read("C:\\Users\\Desktop\\MyApp.lnk")
@@ -30,9 +30,10 @@ import (
 // Constants for default values
 const (
 	DefaultIconLocation = "%SystemRoot%\\System32\\SHELL32.dll,0"
-	DefaultWindowStyle  = "1"
-	MaximizedWindow     = "3"
-	MinimizedWindow     = "7"
+
+	WindowStyleNormal    = "1"
+	WindowStyleMaximized = "3"
+	WindowStyleMinimized = "7"
 )
 
 // Shortcut represents a Windows shortcut (.lnk file) and its properties.
@@ -51,8 +52,9 @@ type Shortcut struct {
 	Hotkey string
 
 	// IconLocation specifies the icon file and index (e.g., "shell32.dll,0")
-	// Format: "path,index" where index is the icon number (0-based)
-	// Use ",0" to use the target file's default icon (index 0)
+	// Format: "path,index" where index is the icon number (0-based).
+	// To use the target file's own icon, set path to the target
+	// (e.g., "C:\\app.exe,0").
 	// If empty, defaults to DefaultIconLocation
 	IconLocation string
 
@@ -60,92 +62,119 @@ type Shortcut struct {
 	// "1" (default) - normal window
 	// "3" - maximized window
 	// "7" - minimized window
-	// Use the provided constants: DefaultWindowStyle, MaximizedWindow, MinimizedWindow
+	// Use the provided constants: WindowStyleNormal, WindowStyleMaximized,
+	// WindowStyleMinimized
 	WindowStyle string
 
 	// WorkingDirectory is the initial working directory when the target is launched
 	WorkingDirectory string
 }
 
-// properties returns a map of COM property names to their corresponding field pointers
-// This method provides a centralized way to iterate over all shortcut properties
-func (s *Shortcut) properties() map[string]*string {
-	return map[string]*string{
-		"TargetPath":       &s.TargetPath,
-		"Arguments":        &s.Arguments,
-		"Description":      &s.Description,
-		"Hotkey":           &s.Hotkey,
-		"IconLocation":     &s.IconLocation,
-		"WindowStyle":      &s.WindowStyle,
-		"WorkingDirectory": &s.WorkingDirectory,
+// propBinding binds a COM property name to its corresponding Shortcut field
+type propBinding struct {
+	name  string
+	field *string
+}
+
+// propBindings returns an ordered slice binding each COM property name to its
+// corresponding field pointer. This method provides a centralized way to
+// iterate over all shortcut properties in a deterministic order.
+func (s *Shortcut) propBindings() []propBinding {
+	return []propBinding{
+		{"TargetPath", &s.TargetPath},
+		{"Arguments", &s.Arguments},
+		{"Description", &s.Description},
+		{"Hotkey", &s.Hotkey},
+		{"IconLocation", &s.IconLocation},
+		{"WindowStyle", &s.WindowStyle},
+		{"WorkingDirectory", &s.WorkingDirectory},
 	}
 }
 
-// wShell wraps Windows Script Shell COM object
-type wShell struct {
-	wshShellObject *ole.IUnknown
-	wshShell       *ole.IDispatch
-}
+// Read reads shortcut properties from a .lnk file
+func Read(path string) (Shortcut, error) {
+	var sc Shortcut
 
-// newWShell creates a new Windows Script Shell instance
-func newWShell() (*wShell, error) {
-	runtime.LockOSThread()
+	// Validate input path
+	if err := validatePath(path); err != nil {
+		return sc, err
+	}
 
-	if err := ole.CoInitializeEx(0, ole.COINIT_APARTMENTTHREADED|ole.COINIT_SPEED_OVER_MEMORY); err != nil {
-		oleErr, ok := err.(*ole.OleError)
-		if !ok {
-			runtime.UnlockOSThread()
-			return nil, fmt.Errorf("failed to initialize COM: %w", err)
+	sh, err := newWshShell()
+	if err != nil {
+		return sc, fmt.Errorf("failed to initialize shell: %w", err)
+	}
+	defer sh.Close()
+
+	disp, err := sh.shortcut(path)
+	if err != nil {
+		return sc, err
+	}
+	defer disp.Release()
+
+	// Read all properties via the binding table
+	for _, binding := range sc.propBindings() {
+		prop, err := oleutil.GetProperty(disp, binding.name)
+		if err != nil {
+			return sc, fmt.Errorf("failed to get property %s: %w", binding.name, err)
 		}
 
-		// 1 = S_FALSE (already initialized as STA), 0x80010106 = RPC_E_CHANGED_MODE (already initialized as MTA)
-		hr := oleErr.Code()
-		if hr != 1 && hr != 0x80010106 {
-			runtime.UnlockOSThread()
-			return nil, fmt.Errorf("failed to initialize COM: %w", err)
+		// Convert COM Variant to string. Unset properties (VT_EMPTY/VT_NULL)
+		// match no case and leave the field as the empty string.
+		switch prop.VT {
+		case ole.VT_BSTR:
+			*binding.field = prop.ToString()
+		case ole.VT_I4:
+			*binding.field = fmt.Sprintf("%d", prop.Value())
+		}
+
+		// Cleanup VARIANT object immediately to prevent accumulation in loop
+		prop.Clear()
+	}
+
+	return sc, nil
+}
+
+// Write creates a new shortcut (.lnk) file with the given properties
+func Write(path string, sc Shortcut) error {
+	// Validate input path
+	if err := validatePath(path); err != nil {
+		return err
+	}
+
+	// Set default values if not provided
+	if sc.IconLocation == "" {
+		sc.IconLocation = DefaultIconLocation
+	}
+	if sc.WindowStyle == "" {
+		sc.WindowStyle = WindowStyleNormal
+	}
+
+	sh, err := newWshShell()
+	if err != nil {
+		return fmt.Errorf("failed to initialize shell: %w", err)
+	}
+	defer sh.Close()
+
+	disp, err := sh.shortcut(path)
+	if err != nil {
+		return err
+	}
+	defer disp.Release()
+
+	// Set all properties via the binding table. Property puts return no
+	// value (the result VARIANT stays VT_EMPTY), so there is nothing to clear.
+	for _, binding := range sc.propBindings() {
+		if _, err := oleutil.PutProperty(disp, binding.name, *binding.field); err != nil {
+			return fmt.Errorf("failed to set property %s: %w", binding.name, err)
 		}
 	}
 
-	wshShellObject, err := oleutil.CreateObject("WScript.Shell")
-	if err != nil {
-		ole.CoUninitialize()
-		runtime.UnlockOSThread()
-		return nil, fmt.Errorf("failed to create WScript.Shell object: %v", err)
+	if _, err := oleutil.CallMethod(disp, "Save"); err != nil {
+		return fmt.Errorf("failed to save shortcut: %w", err)
 	}
 
-	wshShell, err := wshShellObject.QueryInterface(ole.IID_IDispatch)
-	if err != nil {
-		wshShellObject.Release()
-		ole.CoUninitialize()
-		runtime.UnlockOSThread()
-		return nil, fmt.Errorf("failed to query interface: %v", err)
-	}
-
-	return &wShell{
-		wshShellObject: wshShellObject,
-		wshShell:       wshShell,
-	}, nil
-}
-
-// Close properly releases all COM resources
-func (w *wShell) Close() {
-	if w.wshShell != nil {
-		w.wshShell.Release()
-	}
-	if w.wshShellObject != nil {
-		w.wshShellObject.Release()
-	}
-	ole.CoUninitialize()
-	runtime.UnlockOSThread()
-}
-
-// createShortcut creates a shortcut COM object for the given path
-func (w *wShell) createShortcut(path string) (*ole.IDispatch, error) {
-	result, err := oleutil.CallMethod(w.wshShell, "CreateShortcut", path)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create shortcut object: %v", err)
-	}
-	return result.ToIDispatch(), nil
+	return nil
 }
 
 // validatePath validates the shortcut file path
@@ -159,90 +188,93 @@ func validatePath(path string) error {
 	return nil
 }
 
-// Read reads shortcut properties from a .lnk file
-func Read(path string) (Shortcut, error) {
-	var shortcut Shortcut
+// HRESULT values not exported by go-ole (which defines only S_OK).
+const (
+	// sFalse: CoInitializeEx succeeded but the thread was already
+	// initialized as STA. The reference count is still incremented.
+	sFalse = 0x1
+	// rpcEChangedMode: CoInitializeEx failed because the thread was
+	// already initialized with a different concurrency model (MTA).
+	rpcEChangedMode = 0x80010106
+)
 
-	// Validate input path
-	if err := validatePath(path); err != nil {
-		return shortcut, err
-	}
-
-	wsh, err := newWShell()
-	if err != nil {
-		return shortcut, fmt.Errorf("failed to initialize shell: %w", err)
-	}
-	defer wsh.Close()
-
-	idispatch, err := wsh.createShortcut(path)
-	if err != nil {
-		return shortcut, err
-	}
-	defer idispatch.Release()
-
-	// Read all properties using the shortcut's properties map
-	for propName, fieldPtr := range shortcut.properties() {
-		property, err := oleutil.GetProperty(idispatch, propName)
-		if err != nil {
-			return shortcut, fmt.Errorf("failed to get property %s: %w", propName, err)
-		}
-
-		// Convert COM Variant to string
-		switch property.VT {
-		case ole.VT_BSTR:
-			*fieldPtr = property.ToString()
-		case ole.VT_I4:
-			*fieldPtr = fmt.Sprintf("%d", property.Value())
-		}
-
-		// Cleanup VARIANT object immediately to prevent accumulation in loop
-		property.Clear()
-	}
-
-	return shortcut, nil
+// wshShell wraps Windows Script Shell COM object
+type wshShell struct {
+	dispatch *ole.IDispatch
+	// coInitialized tracks whether CoInitializeEx actually succeeded on this
+	// thread. CoUninitialize must only be called when true; RPC_E_CHANGED_MODE
+	// means initialization failed and there is no reference count to release.
+	coInitialized bool
 }
 
-// Make creates a new shortcut (.lnk) file with the given properties
-func Make(path string, shortcut Shortcut) error {
-	// Validate input path
-	if err := validatePath(path); err != nil {
-		return err
-	}
+// newWshShell creates a new Windows Script Shell instance
+func newWshShell() (*wshShell, error) {
+	runtime.LockOSThread()
 
-	// Set default values if not provided
-	if shortcut.IconLocation == "" {
-		shortcut.IconLocation = DefaultIconLocation
-	}
-	if shortcut.WindowStyle == "" {
-		shortcut.WindowStyle = DefaultWindowStyle
-	}
+	coInitialized := true
+	if err := ole.CoInitializeEx(0, ole.COINIT_APARTMENTTHREADED|ole.COINIT_SPEED_OVER_MEMORY); err != nil {
+		var oleErr *ole.OleError
+		if !errors.As(err, &oleErr) {
+			runtime.UnlockOSThread()
+			return nil, fmt.Errorf("failed to initialize COM: %w", err)
+		}
 
-	wsh, err := newWShell()
-	if err != nil {
-		return fmt.Errorf("failed to initialize shell: %w", err)
-	}
-	defer wsh.Close()
-
-	idispatch, err := wsh.createShortcut(path)
-	if err != nil {
-		return err
-	}
-	defer idispatch.Release()
-
-	// Set all properties using the shortcut's properties map
-	for propName, fieldPtr := range shortcut.properties() {
-		if res, err := oleutil.PutProperty(idispatch, propName, *fieldPtr); err != nil {
-			return fmt.Errorf("failed to set property %s: %w", propName, err)
-		} else if res != nil {
-			res.Clear()
+		hr := oleErr.Code()
+		switch hr {
+		case sFalse:
+			// S_FALSE still increments the reference count, pairing is required.
+		case rpcEChangedMode:
+			// Initialization failed; must NOT call CoUninitialize later.
+			coInitialized = false
+		default:
+			runtime.UnlockOSThread()
+			return nil, fmt.Errorf("failed to initialize COM: %w", err)
 		}
 	}
 
-	if res, err := oleutil.CallMethod(idispatch, "Save"); err != nil {
-		return fmt.Errorf("failed to save shortcut: %w", err)
-	} else if res != nil {
-		res.Clear()
+	sh := &wshShell{coInitialized: coInitialized}
+
+	unknown, err := oleutil.CreateObject("WScript.Shell")
+	if err != nil {
+		sh.Close()
+		return nil, fmt.Errorf("failed to create WScript.Shell object: %v", err)
 	}
 
-	return nil
+	dispatch, err := unknown.QueryInterface(ole.IID_IDispatch)
+	if err != nil {
+		unknown.Release()
+		sh.Close()
+		return nil, fmt.Errorf("failed to query interface: %v", err)
+	}
+	// QueryInterface AddRef'ed the IDispatch, so the IUnknown reference
+	// can be released here, before any possible CoUninitialize.
+	unknown.Release()
+	sh.dispatch = dispatch
+
+	return sh, nil
+}
+
+// Close releases all COM resources and unlocks the OS thread locked by
+// newWshShell. It must be called exactly once per successful newWshShell
+// and is safe to call multiple times.
+func (sh *wshShell) Close() {
+	if sh.dispatch != nil {
+		sh.dispatch.Release()
+		sh.dispatch = nil
+	}
+	if sh.coInitialized {
+		ole.CoUninitialize()
+		sh.coInitialized = false
+	}
+	runtime.UnlockOSThread()
+}
+
+// shortcut returns the COM shortcut object for the given path.
+// It does not create the .lnk file itself.
+func (sh *wshShell) shortcut(path string) (*ole.IDispatch, error) {
+	res, err := oleutil.CallMethod(sh.dispatch, "CreateShortcut", path)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create shortcut object: %v", err)
+	}
+	return res.ToIDispatch(), nil
 }
