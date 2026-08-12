@@ -34,12 +34,9 @@ import (
 func main() {
 	shortcut := lnk.Shortcut{
 		TargetPath:       "C:\\Windows\\System32\\notepad.exe",
-		Arguments:        "",
 		Description:      "Notepad Shortcut",
 		Hotkey:           "Alt+Ctrl+T",
 		WorkingDirectory: "C:\\Windows\\System32",
-		IconLocation:     ",0",
-		WindowStyle:      "1",
 	}
 
 	// Create a new shortcut
