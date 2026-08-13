@@ -167,19 +167,17 @@ func Write(path string, sc Shortcut) error {
 
 	for _, binding := range sc.propBindings() {
 		res, err := oleutil.PutProperty(disp, binding.name, *binding.field)
-		// Clear even on error: invoke() never returns nil.
-		res.Clear()
 		if err != nil {
 			return fmt.Errorf("failed to set property %s: %w", binding.name, err)
 		}
+		res.Clear()
 	}
 
 	res, err := oleutil.CallMethod(disp, "Save")
-	// Clear even on error: invoke() never returns nil.
-	res.Clear()
 	if err != nil {
 		return fmt.Errorf("failed to save shortcut: %w", err)
 	}
+	res.Clear()
 
 	return nil
 }
@@ -196,7 +194,7 @@ func validatePath(path string) error {
 	return nil
 }
 
-// HRESULT values not exported by go-ole (which defines only S_OK).
+// HRESULT values go-ole does not export.
 const (
 	// sFalse: CoInitializeEx succeeded; thread was already STA, count still incremented.
 	sFalse = 0x1
@@ -220,15 +218,15 @@ type wshShell struct {
 func newWshShell() (*wshShell, error) {
 	sh := &wshShell{threadLocked: true}
 	runtime.LockOSThread()
-	if err := sh.acquire(); err != nil {
+	if err := sh.init(); err != nil {
 		sh.Close()
 		return nil, err
 	}
 	return sh, nil
 }
 
-// acquire initializes COM and the WScript.Shell dispatch.
-func (sh *wshShell) acquire() error {
+// init initializes COM and the WScript.Shell dispatch.
+func (sh *wshShell) init() error {
 	coInitialized := true
 	if err := ole.CoInitializeEx(0, ole.COINIT_APARTMENTTHREADED|ole.COINIT_SPEED_OVER_MEMORY); err != nil {
 		var oleErr *ole.OleError
