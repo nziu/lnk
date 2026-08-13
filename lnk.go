@@ -63,12 +63,7 @@ type Shortcut struct {
 	// path (e.g., "C:\\app.exe,0"). If empty, defaults to DefaultIconLocation.
 	IconLocation string
 
-	// WindowStyle controls how the target window is displayed:
-	// "1" (default) - normal window
-	// "3" - maximized window
-	// "7" - minimized window
-	// Use the provided constants: WindowStyleNormal, WindowStyleMaximized,
-	// WindowStyleMinimized
+	// WindowStyle is the target window's display mode; use the WindowStyle* constants.
 	WindowStyle string
 
 	// WorkingDirectory is the initial working directory when the target is launched
