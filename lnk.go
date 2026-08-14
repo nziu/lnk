@@ -1,18 +1,19 @@
 //go:build windows
 
 // Package lnk provides functionality to create and read Windows shortcut (.lnk) files.
-// It uses Windows Script Shell COM object to interact with shortcut files.
+// It uses the WScript.Shell COM object from Windows Script Host to interact with shortcut files.
 //
 // Example usage:
 //
 //	shortcut := lnk.Shortcut{
-//		TargetPath:       "C:\\Program Files\\MyApp\\app.exe",
-//		Description:      "My Application",
-//		WorkingDirectory: "C:\\Program Files\\MyApp",
+//		TargetPath:       "C:\\Windows\\System32\\notepad.exe",
+//		Description:      "Notepad Shortcut",
+//		Hotkey:           "Alt+Ctrl+T",
+//		WorkingDirectory: "C:\\Windows\\System32",
 //	}
-//	err := lnk.Write("C:\\Users\\Desktop\\MyApp.lnk", shortcut)
+//	err := lnk.Write("notepad.lnk", shortcut)
 //
-//	shortcut, err := lnk.Read("C:\\Users\\Desktop\\MyApp.lnk")
+//	shortcut, err := lnk.Read("notepad.lnk")
 package lnk
 
 import (
@@ -55,7 +56,8 @@ type Shortcut struct {
 	// Description is a human-readable description of the shortcut
 	Description string
 
-	// Hotkey is the keyboard shortcut to activate this shortcut (e.g., "Ctrl+Alt+M")
+	// Hotkey is the keyboard shortcut to activate this shortcut (e.g., "Ctrl+Alt+M").
+	// Windows normalizes the key order, so Read may return a different order than Write.
 	Hotkey string
 
 	// IconLocation is the icon file and 0-based index, "path,index"

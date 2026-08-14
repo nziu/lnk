@@ -1,15 +1,14 @@
 # lnk
 
 [![Go Reference](https://pkg.go.dev/badge/github.com/nziu/lnk.svg)](https://pkg.go.dev/github.com/nziu/lnk)
-[![Go Report Card](https://goreportcard.com/badge/github.com/nziu/lnk)](https://goreportcard.com/report/github.com/nziu/lnk)
 
-A simple Go library for creating and reading Windows shortcut (`.lnk`) files.
+Create and read Windows shortcut (.lnk) files in Go.
 
 ## Features
 
 - Create Windows shortcuts with full property control
 - Read existing shortcut properties
-- Pure Go implementation using COM automation
+- Pure Go bindings (no cgo) to Windows COM automation
 
 ## Installation
 
@@ -18,8 +17,6 @@ go get github.com/nziu/lnk
 ```
 
 ## Quick Start
-
-Here's a simple example to create and read a Windows shortcut:
 
 ```go
 package main
@@ -49,9 +46,7 @@ func main() {
 	if err != nil {
 		log.Fatalf("Failed to read shortcut: %v", err)
 	}
-	fmt.Printf("Target Path:       %s\n", shortcut.TargetPath)
-	fmt.Printf("Description:       %s\n", shortcut.Description)
-	fmt.Printf("Working Directory: %s\n", shortcut.WorkingDirectory)
+	fmt.Printf("%+v\n", shortcut)
 }
 ```
 
