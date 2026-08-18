@@ -1,9 +1,12 @@
 //go:build windows
 
-// Package lnk provides functionality to create and read Windows shortcut (.lnk) files.
-// It uses the WScript.Shell COM object from Windows Script Host to interact with shortcut files.
+// Package lnk creates and reads Windows shortcut (.lnk) files via WScript.Shell.
 //
-// Example usage:
+// Write replaces the whole shortcut; it is not a partial update.
+// Empty optional fields clear previous values, except IconLocation and
+// WindowStyle, which fall back to DefaultIconLocation and WindowStyleNormal.
+//
+// Example:
 //
 //	shortcut := lnk.Shortcut{
 //		TargetPath:       "C:\\Windows\\System32\\notepad.exe",
@@ -29,46 +32,40 @@ import (
 	"github.com/go-ole/go-ole/oleutil"
 )
 
-const (
-	DefaultIconLocation = "%SystemRoot%\\System32\\SHELL32.dll,0"
+// DefaultIconLocation is used by Write when IconLocation is empty.
+const DefaultIconLocation = "%SystemRoot%\\System32\\SHELL32.dll,0"
 
+const (
 	WindowStyleNormal    = "1"
 	WindowStyleMaximized = "3"
 	WindowStyleMinimized = "7"
 )
 
-// Validation errors returned by Read or Write.
 var (
 	ErrEmptyPath        = errors.New("lnk: path cannot be empty")
 	ErrInvalidExtension = errors.New("lnk: path must have .lnk extension")
-	ErrNoTargetPath     = errors.New("lnk: shortcut TargetPath is required")
+	ErrEmptyTargetPath  = errors.New("lnk: TargetPath cannot be empty")
 )
 
-// Shortcut represents a Windows shortcut (.lnk file) and its properties.
+var errCOMApartment = errors.New("lnk: COM already initialized with a different concurrency model")
+
+// Shortcut holds WSH properties of a .lnk file.
 // TargetPath is required by Write; all other fields are optional.
 type Shortcut struct {
-	// TargetPath is the path to the target file, folder, or URL that the shortcut points to
-	TargetPath string
-
-	// Arguments are command-line arguments to pass to the target when executed
-	Arguments string
-
-	// Description is a human-readable description of the shortcut
+	TargetPath  string
+	Arguments   string
 	Description string
 
-	// Hotkey is the keyboard shortcut to activate this shortcut (e.g., "Ctrl+Alt+M").
-	// Windows normalizes the key order, so Read may return a different order than Write.
+	// Windows may reorder modifiers, so Read can differ from Write.
 	Hotkey string
 
-	// IconLocation is the icon file and 0-based index, "path,index"
-	// (e.g., "shell32.dll,0"). For the target's own icon, use the target
-	// path (e.g., "C:\\app.exe,0"). If empty, defaults to DefaultIconLocation.
+	// Empty uses DefaultIconLocation, not the target's own icon.
+	// Format is "path,index" (e.g. "shell32.dll,0").
 	IconLocation string
 
-	// WindowStyle is the target window's display mode; use the WindowStyle* constants.
+	// Use WindowStyle* constants; other values are passed through to WSH.
 	WindowStyle string
 
-	// WorkingDirectory is the initial working directory when the target is launched
 	WorkingDirectory string
 }
 
@@ -77,7 +74,7 @@ type propBinding struct {
 	field *string
 }
 
-// propBindings defines the single shared field order for Read and Write.
+// propBindings keeps Read and Write on the same WSH properties and order.
 func (s *Shortcut) propBindings() []propBinding {
 	return []propBinding{
 		{"TargetPath", &s.TargetPath},
@@ -90,22 +87,21 @@ func (s *Shortcut) propBindings() []propBinding {
 	}
 }
 
-// Read reads a .lnk file's shortcut properties; missing files satisfy fs.ErrNotExist.
+// Read returns the shortcut at path. A missing file satisfies fs.ErrNotExist.
 func Read(path string) (Shortcut, error) {
 	var sc Shortcut
-
 	if err := validatePath(path); err != nil {
 		return sc, err
 	}
 
-	// WSH's CreateShortcut opens-or-creates silently; it never reports a missing file.
+	// CreateShortcut opens-or-creates and never reports a missing file.
 	if _, err := os.Stat(path); err != nil {
 		return sc, fmt.Errorf("lnk: %w", err)
 	}
 
 	sh, err := newWshShell()
 	if err != nil {
-		return sc, fmt.Errorf("failed to initialize shell: %w", err)
+		return sc, err
 	}
 	defer sh.Close()
 
@@ -116,35 +112,37 @@ func Read(path string) (Shortcut, error) {
 	defer disp.Release()
 
 	for _, binding := range sc.propBindings() {
-		prop, err := oleutil.GetProperty(disp, binding.name)
+		v, err := oleutil.GetProperty(disp, binding.name)
 		if err != nil {
-			return sc, fmt.Errorf("failed to get property %s: %w", binding.name, err)
+			clearVariant(v)
+			return sc, fmt.Errorf("lnk: failed to get property %s: %w", binding.name, err)
 		}
 
-		// Unset properties (VT_EMPTY/VT_NULL) hit no case and stay empty.
-		switch prop.VT {
+		// VT_EMPTY/VT_NULL skip the switch and stay the empty string.
+		switch v.VT {
 		case ole.VT_BSTR:
-			*binding.field = prop.ToString()
+			*binding.field = v.ToString()
 		case ole.VT_I4:
-			*binding.field = fmt.Sprintf("%d", prop.Value())
+			*binding.field = fmt.Sprintf("%d", v.Value())
 		}
 
-		// Clear in the loop; a deferred Clear would hold every BSTR until
-		// Read returns.
-		prop.Clear()
+		// Clear now; a deferred Clear would keep every BSTR until Read returns.
+		v.Clear()
 	}
 
 	return sc, nil
 }
 
-// Write creates a .lnk file; ErrNoTargetPath is returned when TargetPath is blank.
+// Write creates or replaces the .lnk at path. Every field is written.
+// Empty optional fields clear prior values, except IconLocation and
+// WindowStyle, which use DefaultIconLocation and WindowStyleNormal.
+// ErrEmptyTargetPath is returned when TargetPath is blank.
 func Write(path string, sc Shortcut) error {
 	if err := validatePath(path); err != nil {
 		return err
 	}
-	// A shortcut without a target is invalid on Windows.
 	if strings.TrimSpace(sc.TargetPath) == "" {
-		return ErrNoTargetPath
+		return ErrEmptyTargetPath
 	}
 
 	sc.IconLocation = cmp.Or(sc.IconLocation, DefaultIconLocation)
@@ -152,7 +150,7 @@ func Write(path string, sc Shortcut) error {
 
 	sh, err := newWshShell()
 	if err != nil {
-		return fmt.Errorf("failed to initialize shell: %w", err)
+		return err
 	}
 	defer sh.Close()
 
@@ -163,52 +161,54 @@ func Write(path string, sc Shortcut) error {
 	defer disp.Release()
 
 	for _, binding := range sc.propBindings() {
-		res, err := oleutil.PutProperty(disp, binding.name, *binding.field)
+		v, err := oleutil.PutProperty(disp, binding.name, *binding.field)
 		if err != nil {
-			return fmt.Errorf("failed to set property %s: %w", binding.name, err)
+			clearVariant(v)
+			return fmt.Errorf("lnk: failed to set property %s: %w", binding.name, err)
 		}
-		res.Clear()
+		v.Clear()
 	}
 
-	res, err := oleutil.CallMethod(disp, "Save")
+	v, err := oleutil.CallMethod(disp, "Save")
 	if err != nil {
-		return fmt.Errorf("failed to save shortcut: %w", err)
+		clearVariant(v)
+		return fmt.Errorf("lnk: failed to save shortcut: %w", err)
 	}
-	res.Clear()
+	v.Clear()
 
 	return nil
 }
 
-// validatePath checks the path first; WSH never reports a bad path itself.
 func validatePath(path string) error {
 	if strings.TrimSpace(path) == "" {
 		return ErrEmptyPath
 	}
-	// filepath.Ext (not a suffix check) rejects "dir.lnk/file" and "x.lnk.bak".
+	// Ext, not a suffix check, so dir.lnk/file and x.lnk.bak are rejected.
 	if !strings.EqualFold(filepath.Ext(path), ".lnk") {
 		return ErrInvalidExtension
 	}
 	return nil
 }
 
-// HRESULT values go-ole does not export.
+func clearVariant(v *ole.VARIANT) {
+	if v != nil {
+		v.Clear()
+	}
+}
+
 const (
-	// sFalse: CoInitializeEx succeeded; thread was already STA, count still incremented.
+	// S_FALSE: already STA; the init count still increments.
 	sFalse = 0x1
-	// rpcEChangedMode: thread already initialized with a different concurrency model (MTA).
+	// RPC_E_CHANGED_MODE: not STA; must not call CoUninitialize.
 	rpcEChangedMode = 0x80010106
 )
 
-// wshShell pins the WScript.Shell COM session and its cleanup to one OS
-// thread, so CoUninitialize and UnlockOSThread run on the same thread.
+// wshShell pins COM to one OS thread so Close can CoUninitialize safely.
 type wshShell struct {
 	dispatch *ole.IDispatch
-	// coInitialized tracks whether CoInitializeEx actually succeeded on this
-	// thread. CoUninitialize must only be called when true; RPC_E_CHANGED_MODE
-	// means initialization failed and there is no reference count to release.
+	// Set on S_OK/S_FALSE so Close does not CoUninit a failed init.
 	coInitialized bool
-	// threadLocked tracks whether LockOSThread is in effect, keeping repeated
-	// Close calls a true no-op on every Go version.
+	// Held with LockOSThread so repeated Close is a no-op.
 	threadLocked bool
 }
 
@@ -222,44 +222,38 @@ func newWshShell() (*wshShell, error) {
 	return sh, nil
 }
 
-// init initializes COM and the WScript.Shell dispatch.
 func (sh *wshShell) init() error {
-	coInitialized := true
 	if err := ole.CoInitializeEx(0, ole.COINIT_APARTMENTTHREADED|ole.COINIT_SPEED_OVER_MEMORY); err != nil {
 		var oleErr *ole.OleError
 		if !errors.As(err, &oleErr) {
-			return fmt.Errorf("failed to initialize COM: %w", err)
+			return fmt.Errorf("lnk: failed to initialize COM: %w", err)
 		}
-
-		switch oleErr.Code() {
+		switch uint32(oleErr.Code()) {
 		case sFalse:
-			// S_FALSE still increments the reference count, pairing is required.
+			// Init count still increased; Close must pair it with CoUninitialize.
 		case rpcEChangedMode:
-			// Initialization failed; must NOT call CoUninitialize later.
-			coInitialized = false
+			return errCOMApartment
 		default:
-			return fmt.Errorf("failed to initialize COM: %w", err)
+			return fmt.Errorf("lnk: failed to initialize COM: %w", err)
 		}
 	}
-	sh.coInitialized = coInitialized
+	sh.coInitialized = true
 
 	unknown, err := oleutil.CreateObject("WScript.Shell")
 	if err != nil {
-		return fmt.Errorf("failed to create WScript.Shell object: %w", err)
+		return fmt.Errorf("lnk: failed to create WScript.Shell object: %w", err)
 	}
-	// QI AddRef'ed the IDispatch, an independent reference; the IUnknown is
-	// always released here, before the caller's Close can CoUninitialize.
+	// QI AddRef'd IDispatch separately; release IUnknown before Close.
 	defer unknown.Release()
 
 	dispatch, err := unknown.QueryInterface(ole.IID_IDispatch)
 	if err != nil {
-		return fmt.Errorf("failed to query interface: %w", err)
+		return fmt.Errorf("lnk: failed to query interface: %w", err)
 	}
 	sh.dispatch = dispatch
 	return nil
 }
 
-// Close must be called once per successful newWshShell; repeated calls are no-ops.
 func (sh *wshShell) Close() {
 	if sh.dispatch != nil {
 		sh.dispatch.Release()
@@ -275,12 +269,18 @@ func (sh *wshShell) Close() {
 	}
 }
 
-// createShortcut returns the WshShortcut object; Write's Save creates the .lnk file.
+// createShortcut transfers the dispatch to the caller.
+// Do not Clear the VARIANT after a successful ToIDispatch (double-Release).
 func (sh *wshShell) createShortcut(path string) (*ole.IDispatch, error) {
-	res, err := oleutil.CallMethod(sh.dispatch, "CreateShortcut", path)
+	v, err := oleutil.CallMethod(sh.dispatch, "CreateShortcut", path)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create shortcut object: %w", err)
+		clearVariant(v)
+		return nil, fmt.Errorf("lnk: failed to create shortcut object: %w", err)
 	}
-	// res's dispatch reference is transferred to the caller; never res.Clear().
-	return res.ToIDispatch(), nil
+	disp := v.ToIDispatch()
+	if disp == nil {
+		v.Clear()
+		return nil, errors.New("lnk: CreateShortcut returned nil dispatch")
+	}
+	return disp, nil
 }

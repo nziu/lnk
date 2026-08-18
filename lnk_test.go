@@ -10,29 +10,28 @@ import (
 )
 
 func TestRoundTrip(t *testing.T) {
-	tempDir := t.TempDir()
-	shortcutPath := filepath.Join(tempDir, "test_shortcut.lnk")
+	path := filepath.Join(t.TempDir(), "test_shortcut.lnk")
 
 	want := Shortcut{
 		TargetPath:       "C:\\Windows\\System32\\notepad.exe",
 		Arguments:        "test.txt",
 		Description:      "Test Shortcut",
-		Hotkey:           "Alt+Ctrl+T", // Windows standardizes hotkey order
+		Hotkey:           "Alt+Ctrl+T", // Read may reorder modifiers; this is canonical.
 		WorkingDirectory: "C:\\Windows\\System32",
 		WindowStyle:      WindowStyleNormal,
 		IconLocation:     DefaultIconLocation,
 	}
 
-	if err := Write(shortcutPath, want); err != nil {
+	if err := Write(path, want); err != nil {
 		t.Fatalf("Write() failed: %v", err)
 	}
 
-	got, err := Read(shortcutPath)
+	got, err := Read(path)
 	if err != nil {
 		t.Fatalf("Read() failed: %v", err)
 	}
 
-	if want != got {
+	if got != want {
 		t.Errorf("Shortcut mismatch:\nWant: %+v\nGot:  %+v", want, got)
 	}
 }
@@ -45,10 +44,10 @@ func TestReadNonexistentFile(t *testing.T) {
 }
 
 func TestWriteEmptyTargetPath(t *testing.T) {
-	lnkPath := filepath.Join(t.TempDir(), "test.lnk")
+	path := filepath.Join(t.TempDir(), "test.lnk")
 	for _, target := range []string{"", "   "} {
-		if err := Write(lnkPath, Shortcut{TargetPath: target}); !errors.Is(err, ErrNoTargetPath) {
-			t.Errorf("Write(TargetPath=%q) = %v, want ErrNoTargetPath", target, err)
+		if err := Write(path, Shortcut{TargetPath: target}); !errors.Is(err, ErrEmptyTargetPath) {
+			t.Errorf("Write(TargetPath=%q) = %v, want ErrEmptyTargetPath", target, err)
 		}
 	}
 }
@@ -74,5 +73,55 @@ func TestValidatePath(t *testing.T) {
 				t.Errorf("validatePath(%q) error = %v, want %v", tt.path, err, tt.wantErr)
 			}
 		})
+	}
+}
+
+func TestWriteDefaults(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "defaults.lnk")
+	target := "C:\\Windows\\System32\\notepad.exe"
+	if err := Write(path, Shortcut{TargetPath: target}); err != nil {
+		t.Fatalf("Write() failed: %v", err)
+	}
+	got, err := Read(path)
+	if err != nil {
+		t.Fatalf("Read() failed: %v", err)
+	}
+	want := Shortcut{
+		TargetPath:   target,
+		IconLocation: DefaultIconLocation,
+		WindowStyle:  WindowStyleNormal,
+	}
+	if got != want {
+		t.Errorf("got %+v, want %+v", got, want)
+	}
+}
+
+func TestWriteReplaces(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "replace.lnk")
+	target := "C:\\Windows\\System32\\notepad.exe"
+	first := Shortcut{
+		TargetPath:       target,
+		Arguments:        "a.txt",
+		Description:      "old",
+		Hotkey:           "Ctrl+Alt+M",
+		WorkingDirectory: "C:\\Windows\\System32",
+	}
+	if err := Write(path, first); err != nil {
+		t.Fatalf("Write(first) failed: %v", err)
+	}
+	if err := Write(path, Shortcut{TargetPath: target}); err != nil {
+		t.Fatalf("Write(replace) failed: %v", err)
+	}
+	got, err := Read(path)
+	if err != nil {
+		t.Fatalf("Read() failed: %v", err)
+	}
+	want := Shortcut{
+		TargetPath:   target,
+		IconLocation: DefaultIconLocation,
+		WindowStyle:  WindowStyleNormal,
+	}
+	if got != want {
+		t.Errorf("got %+v, want %+v", got, want)
 	}
 }
